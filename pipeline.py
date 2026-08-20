@@ -32,30 +32,35 @@ EMAIL_PASSWORD    = os.environ["EMAIL_PASSWORD"]
 EMAIL_TO          = os.environ["EMAIL_TO"]
 
 # ── DISCOVERY PROMPT ──────────────────────────────────────────────────────────
-DISCOVERY_PROMPT = """You are a research assistant for the Economic Affairs section of
-the Embassy of the Republic of Rwanda in Washington, DC. Use web search to find REAL,
-CURRENTLY SCHEDULED public events happening in the Washington DC area in the next 7 days
-(from {today} to {week_end}), relevant to trade, economic diplomacy, or US-Africa relations.
+DISCOVERY_PROMPT = """You are a research assistant for the Embassy of the Republic of Rwanda in
+Washington, DC. Use web search to find REAL, CURRENTLY SCHEDULED public events happening in the
+Washington DC area between {today} and {week_end} (covering this month and next month, since some
+events require early registration).
 
-Search these types of sources specifically:
-- DC think tanks: Brookings Institution, Atlantic Council (especially Africa Center),
-  CSIS, Wilson Center (Africa Program)
-- Other countries' embassies in DC hosting public events (trade, business, cultural
-  events with an economic/diplomatic angle)
-- US Chamber of Commerce, Corporate Council on Africa, BCIU (Business Council for
-  International Understanding), or similar trade/business organizations
+Search these types of sources:
+- DC think tanks: Brookings Institution, Atlantic Council (all centers, not just Africa),
+  CSIS, Wilson Center
+- Other countries' embassies in DC hosting public events
+- US Chamber of Commerce, Corporate Council on Africa, BCIU, or similar trade/business organizations
 - US government public events: State Department, USAID, Department of Commerce
-  international trade events
+- Any other credible DC-area organization hosting something an embassy might plausibly
+  want to know about
 
-RULES:
+SCOPE — cast a wide net, don't over-filter:
+This does NOT need to be strictly economic or trade-related. Include anything an embassy
+staff member might plausibly find useful or interesting to attend — this could range from
+AI in education, to investment conferences, to African tourism panels, to cultural events,
+to public health, to technology policy, to regional security discussions. When in doubt,
+INCLUDE it rather than leave it out — a human will review the list and judge what's actually
+worth attending. Your job is to surface real options, not to pre-decide what matters.
+
+RULES (these are about accuracy, not topic — do not loosen these):
 1. Only include REAL events you actually found via search, with a real source URL
 2. Only include events happening between {today} and {week_end}
 3. Do not invent or guess at events — if you're not confident it's real and
    currently scheduled, leave it out
-4. Prioritize events relevant to trade, Africa, or economic diplomacy specifically
-   over generic unrelated events, even at the listed organizations
-5. If you find fewer than 3 genuinely real events, that's fine — report only
-   what you actually verified
+4. If you find very few genuinely real events, that's fine — report only what you
+   actually verified. Do not pad the list with fabricated events to seem thorough.
 
 For each event, note the exact date and time if available (Eastern Time), and
 whether it's in-person (with address) or virtual.
@@ -71,10 +76,22 @@ Respond with ONLY a valid JSON array, no other text before or after:
     "end_time": "HH:MM" or null if unknown,
     "location": "Address, or 'Virtual' if online",
     "description": "1-2 sentence description of the event",
-    "relevance": "1 sentence on why this matters for Rwanda/US-Africa economic relations",
+    "relevance": "1 sentence on why embassy staff might find this worth knowing about",
     "source_url": "Direct URL to the event page"
   }}
 ]"""
+
+
+def end_of_next_month(today: date) -> date:
+    """Returns the last day of next month — i.e. if today is in
+    August, returns Sept 30 (covers this month + all of next month)."""
+    year = today.year
+    month = today.month + 2
+    if month > 12:
+        month -= 12
+        year += 1
+    first_day_after = date(year, month, 1)
+    return first_day_after - timedelta(days=1)
 
 
 def generate_calendar_link(event: dict) -> str:
@@ -118,8 +135,8 @@ def find_events(client: Anthropic, today: date, week_end: date) -> list:
     try:
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4000,
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+            max_tokens=6000,
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 12}],
             messages=[{"role": "user", "content": prompt}]
         )
 
@@ -148,7 +165,7 @@ def find_events(client: Anthropic, today: date, week_end: date) -> list:
 
 def send_email(events: list, today: date, week_end: date):
     count = len(events)
-    subject = f"DC Events This Week — {count} relevant event{'s' if count != 1 else ''} ({today.strftime('%b %d')}–{week_end.strftime('%b %d')})"
+    subject = f"DC Events Worth Knowing About — {count} found ({today.strftime('%b %d')}–{week_end.strftime('%b %d')})"
 
     def event_block(e):
         cal_link = generate_calendar_link(e)
@@ -188,10 +205,10 @@ def send_email(events: list, today: date, week_end: date):
   <div style="font-family:'EB Garamond', Georgia, 'Times New Roman', serif; max-width:600px; margin:0 auto; padding:32px 24px; background-color:#ffffff; color:#222;">
 
     <h1 style="font-size:22px; font-weight:600; margin-bottom:4px;">
-      DC Events This Week
+      DC Events Worth Knowing About
     </h1>
     <p style="color:#888; font-size:14px; margin-top:0;">
-      {today.strftime('%B %d')} – {week_end.strftime('%B %d, %Y')} &middot; Trade &amp; Economic Affairs
+      {today.strftime('%B %d')} – {week_end.strftime('%B %d, %Y')} &middot; Broad scan, not just economic/trade
     </p>
 
     <ul style="list-style:none; padding:0; margin:24px 0 0;">
@@ -223,11 +240,11 @@ def send_email(events: list, today: date, week_end: date):
 
 def run_digest():
     log.info("=" * 60)
-    log.info("DC EVENTS WEEKLY DIGEST — STARTING")
+    log.info("DC EVENTS DIGEST — STARTING")
     log.info("=" * 60)
 
     today = date.today()
-    week_end = today + timedelta(days=7)
+    week_end = end_of_next_month(today)  # covers this month + next month
 
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
     events = find_events(client, today, week_end)
